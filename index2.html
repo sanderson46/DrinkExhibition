@@ -1,0 +1,1665 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Drink Atlas</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Big+Shoulders+Display:wght@500;700;800&family=Public+Sans:wght@400;600;700&display=swap" rel="stylesheet">
+
+<!--
+================================================================================
+ AI-AGENT ORIENTATION  -  READ THIS FIRST
+================================================================================
+ IARC 425 / Reading Big Data at the Human Scale. This is the "Website" box of
+ the workflow diagram. It is a DUMB TERMINAL: it draws what app.py sends and
+ posts the student's edits back. No physics happens here.
+
+ The whole page is driven by three endpoints:
+     GET  /api/config        once at boot - room, grid, api list, defaults
+     GET  /api/frame?field=  ~12x/sec - the gradient field + every readout
+     POST /api/systems       place mode writes the layout back
+     GET  /api/placement     the "Copy placement for Claude" text
+     POST /api/export        writes one JSON per system into exports/
+
+ Rules are deliberately NOT editable from the page. They live in app.py ->
+ RULES, the page only reports them, and there is no endpoint to change them.
+ A student asking for "a rule that dims zone 3 when the tide is out" is asking
+ for an edit to that list, not for a form on this page.
+
+ Everything a student is likely to ask you to change sits inside a marked
+ block. In HTML the markers are comments reading ">>> AI-AGENT EDIT ZONE:
+ <NAME> >>>" and "<<< END AI-AGENT EDIT ZONE: <NAME> <<<"; in CSS and JS the
+ same two markers appear as ordinary comments. Grep for "AI-AGENT EDIT ZONE"
+ to list them all.
+
+ There are five:
+     1. THEME          every colour, rule weight and font in one :root block
+     2. AXON           the gallery box geometry, traced from Diagram Blank.ai
+     3. WORKFLOW       the API -> Python -> JSON -> Grasshopper diagram
+     4. FIELD_RAMPS    the four gradient colour ramps
+     5. STATEMENT      the artistic statement card
+
+ HOUSE RULES, so edits stay consistent:
+   * Styling is the point of this template - it is deliberately plain so it can
+     be restyled. Change colour ONLY by editing a custom property in THEME.
+     Never hard-code a hex anywhere else in this file.
+   * System identity (heat pump / humidifier / fan / can light) is carried by
+     the ICON and the LABEL, never by colour. Colour is reserved for the field
+     gradient. Do not "helpfully" colour-code the systems - four categorical
+     hues cannot be told apart reliably under colour-vision deficiency, and the
+     line-art glyphs already separate them perfectly.
+   * The six can lights are fixed to the ceiling grid because they are what
+     divides the room into its six zones. They can be re-powered and rule-linked
+     but not moved. Requests to "move the lights" should move the ZONE GRID, in
+     app.py's CAN_LIGHTS.
+   * The room is drawn in axonometric projection. The gradient is painted on the
+     TOP FACE only, because the simulation is a horizontal slice through the
+     room at occupant height.
+================================================================================
+-->
+
+<style>
+/* >>> AI-AGENT EDIT ZONE: THEME >>>
+   Every colour, weight and metric in the page. Restyle from here and nowhere
+   else. Ramps for the gradient itself are in FIELD_RAMPS, further down. */
+:root{
+  /* Taproom at night: dim stained wood, foam-coloured type, amber kept for
+     selection only so the brewery heat map is the brightest thing on screen. */
+  --font: "Public Sans", "Helvetica Neue", Helvetica, Arial, sans-serif;
+  --font-display: "Big Shoulders Display", "Arial Narrow", "Helvetica Neue", sans-serif;
+  --font-mono: "Public Sans", Consolas, monospace;
+
+  --page:        #1c1712;   /* dark stained wood     */
+  --surface:     #231d17;   /* panels, chart surface */
+  --surface-2:   #2d251d;   /* inset wells, floor    */
+  --ink:         #f1e6d3;   /* foam / label paper    */
+  --ink-2:       #c4b59e;   /* secondary text        */
+  --ink-3:       #8f8170;   /* muted / axis          */
+  --rule:        #3a3128;   /* hairlines             */
+  --rule-2:      #54483a;   /* stronger hairlines    */
+
+  --accent:      #e3a83e;   /* amber: selection / live / focus */
+  --neon:        #ffcf7a;   /* the sign: title tube colour      */
+  --glow:        #ff8a2b;   /* the sign: halo around the tube   */
+  --ok:          #8cbf6e;   /* rule condition TRUE   */
+
+  --pad: 24px;
+  --gap: 28px;
+  --hair: 1px;
+  --diagram-stroke: 3;      /* SVG stroke-width in diagram units */
+  --radius: 2px;
+}
+/* <<< END AI-AGENT EDIT ZONE: THEME <<< */
+
+*{box-sizing:border-box}
+html,body{margin:0;padding:0}
+body{
+  background:var(--page); color:var(--ink);
+  font-family:var(--font); font-size:15px; line-height:1.55;
+  -webkit-font-smoothing:antialiased;
+}
+/* Atmosphere: one warm pool of light falling on the room, and a fine film
+   grain over everything so the flat darks read as a dim interior. */
+body::before{
+  content:"";position:fixed;inset:0;pointer-events:none;z-index:0;
+  background:
+    radial-gradient(ellipse 70% 55% at 50% 38%,
+      color-mix(in oklab, var(--glow) 13%, transparent), transparent 70%),
+    radial-gradient(ellipse 120% 90% at 50% 40%, transparent 55%,
+      color-mix(in oklab, var(--page) 70%, black) 100%);
+}
+body::after{
+  content:"";position:fixed;inset:0;pointer-events:none;z-index:60;opacity:.07;
+  mix-blend-mode:overlay;
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+.wrap{position:relative;z-index:1;max-width:1240px;margin:0 auto;padding:var(--pad) var(--pad) 48px}
+
+h1{font-family:var(--font-display);font-size:clamp(56px,10vw,144px);font-weight:700;
+  line-height:.86;margin:0 0 18px;letter-spacing:.01em;
+  color:var(--neon);
+  text-shadow:
+    0 0 2px color-mix(in oklab, var(--neon) 80%, transparent),
+    0 0 14px color-mix(in oklab, var(--glow) 70%, transparent),
+    0 0 42px color-mix(in oklab, var(--glow) 45%, transparent),
+    0 0 90px color-mix(in oklab, var(--glow) 30%, transparent);
+  animation:signOn 1.6s steps(1,end) .2s both}
+/* The sign switches on once, with the stutter of a real tube catching. */
+@keyframes signOn{
+  0%{opacity:.08;text-shadow:none} 12%{opacity:1} 16%{opacity:.15;text-shadow:none}
+  24%{opacity:1} 27%{opacity:.3;text-shadow:none} 40%,100%{opacity:1}
+}
+h2{font-family:var(--font-display);font-size:36px;font-weight:700;margin:0 0 14px;
+  line-height:1;letter-spacing:.005em}
+h3{font-size:14px;font-weight:700;margin:0 0 8px}
+p{margin:0 0 10px}
+.sub{color:var(--ink-2);font-size:15px;max-width:60ch}
+.mono{font-family:var(--font-mono);font-variant-numeric:tabular-nums}
+.muted{color:var(--ink-3)}
+
+section{
+  border-top:var(--hair) solid var(--rule); padding:var(--pad) 0 0;
+  margin-bottom:calc(var(--gap)*1.6);
+}
+header.top{
+  display:flex;flex-wrap:wrap;gap:var(--gap);align-items:flex-end;
+  justify-content:space-between;
+  padding:32px 0 20px; margin-bottom:8px;
+}
+
+/* --- controls ---------------------------------------------------------- */
+button,select,input{font-family:var(--font);font-size:13px;color:var(--ink)}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.btn{
+  background:var(--surface); border:var(--hair) solid var(--rule-2);
+  padding:7px 14px; cursor:pointer; border-radius:999px;
+}
+.btn:hover{background:var(--surface-2)}
+.btn:active{transform:translateY(1px)}
+.btn[disabled]{opacity:.4;cursor:default}
+.seg{display:inline-flex;border:var(--hair) solid var(--rule-2);border-radius:999px;
+  overflow:hidden;background:var(--surface)}
+.seg button{
+  background:var(--surface);border:0;border-right:var(--hair) solid var(--rule-2);
+  padding:7px 15px;cursor:pointer;transition:background .15s,color .15s;
+}
+.seg button:last-child{border-right:0}
+.seg button[aria-pressed="true"]{background:var(--accent);color:var(--page);font-weight:700;
+  box-shadow:0 0 18px color-mix(in oklab, var(--glow) 45%, transparent)}
+select,input[type=number],input[type=text]{
+  background:var(--surface);border:var(--hair) solid var(--rule-2);padding:5px 6px;
+  border-radius:var(--radius);
+}
+input[type=range]{accent-color:var(--accent);width:100%}
+label{font-size:12px;color:var(--ink-3);display:block;margin-bottom:4px}
+.row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+
+/* --- gallery ----------------------------------------------------------- */
+.gallery-grid{display:grid;grid-template-columns:1fr;gap:var(--pad)}
+.readouts{display:grid;grid-template-columns:1.2fr 1fr 1.2fr;gap:calc(var(--pad)*1.5);align-items:start}
+#axonWrap{position:relative}
+#axon{width:100%;display:block;cursor:grab;touch-action:none;
+      background:
+        radial-gradient(ellipse 60% 60% at 50% 45%,
+          color-mix(in oklab, var(--surface-2) 100%, var(--glow) 6%), var(--surface) 75%);
+      border-radius:6px;
+      box-shadow:0 0 0 var(--hair) var(--rule),
+                 0 40px 120px -30px color-mix(in oklab, var(--glow) 28%, transparent)}
+.viewBar{display:flex;align-items:center;gap:6px;margin-top:10px;flex-wrap:wrap;font-size:12px}
+.viewBar .spacer{flex:1}
+.btn.sm{padding:3px 8px;font-size:11px}
+
+.legend{margin-top:10px}
+.legend .bar{height:16px;border-radius:999px}
+.legend .ticks{display:flex;justify-content:space-between;font-size:12px;color:var(--ink-2);margin-top:4px}
+
+.stat{border-top:var(--hair) solid var(--rule);padding:6px 0;display:flex;justify-content:space-between}
+.stat:first-child{border-top:0}
+.stat b{font-weight:700;font-variant-numeric:tabular-nums}
+
+.zonegrid{display:grid;grid-template-columns:repeat(3,1fr);gap:4px;margin-top:8px}
+.zonecell{border:var(--hair) solid var(--rule);padding:5px 6px;background:var(--surface-2)}
+.zonecell .z{font-size:11px;color:var(--ink-3)}
+.zonecell .v{font-size:16px;font-weight:700;font-variant-numeric:tabular-nums}
+
+/* --- systems row ------------------------------------------------------- */
+.systems{display:grid;grid-template-columns:repeat(4,1fr);gap:var(--pad)}
+.sysCard{display:flex;flex-direction:column;gap:8px}
+.sysCard .icon{height:96px;display:flex;align-items:center;justify-content:center}
+.sysCard .icon svg{height:92px;width:auto;color:var(--ink);
+  filter:drop-shadow(0 0 10px color-mix(in oklab, var(--glow) 30%, transparent))}
+.sysCard .name{font-weight:700;font-size:15px}
+.sysCard .meta{font-size:13px;color:var(--ink-2);min-height:34px}
+.graph{border:var(--hair) solid var(--rule-2);background:var(--surface);position:relative}
+.graph canvas{display:block;width:100%;height:100%}
+.sixpack{display:grid;grid-template-columns:1fr 1fr;gap:5px}
+.sixpack .graph{border-width:var(--hair);border-color:var(--rule-2)}
+.tag{display:inline-flex;align-items:center;gap:4px;font-size:10px;color:var(--ink-2)}
+.dot{width:7px;height:7px;border:var(--hair) solid var(--ink-3);border-radius:50%}
+.dot.on{background:var(--ok);border-color:var(--ok)}
+
+/* --- linking table ----------------------------------------------------- */
+.linkGrid{display:grid;grid-template-columns:1fr 1fr;gap:var(--pad)}
+/* Tables scroll inside their own panel rather than pushing the page sideways:
+   a horizontally scrolling PAGE loses the header and the diagram, a scrolling
+   table loses nothing. */
+.tableWrap{overflow-x:auto}
+.tableWrap table{min-width:420px}
+.tableWrap table.rules{min-width:520px}
+/* Grid items are min-width:auto by default, so a wide table would push the
+   whole column past the viewport instead of scrolling inside its wrapper. */
+.linkGrid>*, .gallery-grid>*{min-width:0}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th,td{text-align:left;padding:6px 8px;border-bottom:var(--hair) solid var(--rule);vertical-align:middle}
+th{font-size:12px;color:var(--ink-3);font-weight:600}
+td.num{text-align:right;font-variant-numeric:tabular-nums}
+tbody tr:hover{background:var(--surface-2)}
+td select,td input{width:100%;min-width:52px}
+.apiRow td:first-child{font-weight:700}
+/* A firing branch is marked by weight and a left rule, not by colour alone. */
+.ruleline{font-family:var(--font-mono);font-size:11px;color:var(--ink-3);
+  padding:1px 0 1px 8px;border-left:2px solid transparent;white-space:nowrap}
+.ruleline.on{color:var(--ink);font-weight:700;border-left-color:var(--ink)}
+.ruleline .kw{display:inline-block;min-width:38px;font-weight:700}
+.ruleline[data-br="if"]::after{content:attr(data-now);font-weight:400;color:var(--ink-3)}
+.needsRule{font-size:11px;color:var(--ink-3);line-height:1.55}
+code{font-family:var(--font-mono);background:var(--surface-2);padding:1px 4px;font-size:11px}
+
+/* --- workflow diagram -------------------------------------------------- */
+#flow{width:100%;height:auto;display:block}
+#flow .box{fill:var(--surface);stroke:var(--ink);stroke-width:var(--diagram-stroke)}
+#flow .box.hot{fill:var(--surface-2)}
+#flow text{font-family:var(--font);font-weight:700;fill:var(--ink);text-anchor:middle}
+#flow .edge{stroke:var(--ink);stroke-width:2.5;fill:none}
+#flow .pip{fill:var(--ink)}
+#flow .hit{fill:transparent;cursor:pointer}
+#flowInfo{
+  border:var(--hair) solid var(--rule);background:var(--surface-2);
+  padding:10px 12px;margin-top:10px;min-height:86px;font-size:12px;
+}
+#flowInfo ul{margin:4px 0 0;padding-left:16px}
+#flowInfo li{margin:1px 0}
+
+/* --- tooltip ----------------------------------------------------------- */
+#tip{
+  position:fixed;pointer-events:none;z-index:50;display:none;
+  background:var(--ink);color:var(--surface);padding:5px 8px;font-size:11px;
+  font-variant-numeric:tabular-nums;white-space:pre;
+}
+
+/* --- statement --------------------------------------------------------- */
+.statement{display:grid;grid-template-columns:minmax(200px,1fr) 2fr;gap:calc(var(--pad)*2)}
+.statement h2{font-size:clamp(36px,4.5vw,56px);margin:0}
+.statement p{max-width:62ch;color:var(--ink-2);font-size:17px;line-height:1.65;margin-bottom:16px}
+
+pre.out{
+  background:var(--surface-2);border:var(--hair) solid var(--rule);
+  padding:10px;overflow:auto;max-height:240px;font-family:var(--font-mono);
+  font-size:11px;margin:0;
+}
+.note{font-size:12px;color:var(--ink-3);margin-top:10px}
+details.backstage{border-top:var(--hair) solid var(--rule);margin-top:calc(var(--gap)*2)}
+details.backstage>summary{cursor:pointer;list-style:none;padding:var(--pad) 0;
+  font-family:var(--font-display);font-size:30px;font-weight:700;color:var(--ink-2)}
+details.backstage>summary::-webkit-details-marker{display:none}
+details.backstage>summary::before{content:"+";display:inline-block;width:1.1em;color:var(--accent)}
+details.backstage[open]>summary::before{content:"\2212"}
+details.backstage>summary span{font-family:var(--font);font-size:14px;font-weight:400;color:var(--ink-3);margin-left:12px}
+details.backstage section{margin-bottom:var(--gap)}
+details.backstage h2{font-size:22px}
+.hide{display:none!important}
+
+@media (prefers-reduced-motion:reduce){
+  *{scroll-behavior:auto}
+  h1{animation:none}
+  .seg button{transition:none}
+}
+@media (max-width:900px){
+  .readouts{grid-template-columns:1fr 1fr}
+  .statement{grid-template-columns:1fr;gap:12px}
+  .systems{grid-template-columns:repeat(2,1fr)}
+  .linkGrid{grid-template-columns:1fr}
+}
+@media (max-width:560px){
+  .systems{grid-template-columns:1fr}
+  .readouts{grid-template-columns:1fr}
+  .wrap{padding:12px}
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="top">
+  <div>
+    <h1>Drink Atlas</h1>
+    <div class="sub">A gallery room tuned by live brewery and weather data.
+      IARC 425, Reading Big Data at the Human Scale.</div>
+  </div>
+  <div class="row">
+    <div>
+      <label>Mode</label>
+      <div class="seg" id="modeSeg">
+        <button data-mode="place" aria-pressed="false">Place</button>
+        <button data-mode="simulate" aria-pressed="true">Simulate</button>
+      </div>
+    </div>
+    <div>
+      <label>Speed</label>
+      <div class="seg" id="speedSeg">
+        <button data-speed="0" aria-pressed="false">Pause</button>
+        <button data-speed="1" aria-pressed="true">1&times;</button>
+        <button data-speed="2.5" aria-pressed="false">2.5&times;</button>
+      </div>
+    </div>
+    <div>
+      <label>&nbsp;</label>
+      <button class="btn" id="resetBtn">Reset room</button>
+    </div>
+  </div>
+</header>
+
+<!-- ======================= GALLERY / AXON ============================== -->
+<section>
+  <h2 class="hide">Gallery space</h2>
+  <div class="row" style="margin-bottom:12px">
+    <div>
+      <label>Field</label>
+      <div class="seg" id="fieldSeg">
+        <button data-field="wind" aria-pressed="false">Wind speed</button>
+        <button data-field="temperature" aria-pressed="true">Temperature</button>
+        <button data-field="humidity" aria-pressed="false">Humidity</button>
+        <button data-field="light" aria-pressed="false">Light</button>
+      </div>
+    </div>
+    <div id="placeHint" class="sub hide" style="flex:1;min-width:220px">
+      Drag a unit to move it. <b>Scroll</b> over one to rotate,
+      <b>shift-scroll</b> for power. Dragging empty space still orbits.
+    </div>
+  </div>
+
+  <div class="gallery-grid">
+    <div id="axonWrap">
+      <canvas id="axon"></canvas>
+      <div class="viewBar">
+        <span class="muted">Drag to orbit &middot; scroll to zoom &middot; double-click to reset</span>
+        <span class="spacer"></span>
+        <button class="btn sm" data-view="-37,26">Axon</button>
+        <button class="btn sm" data-view="-90,84">Plan</button>
+        <button class="btn sm" data-view="-90,10">Front</button>
+        <button class="btn sm" data-view="0,10">Side</button>
+      </div>
+      <div class="note" id="viewNote"></div>
+    </div>
+
+    <div class="readouts">
+      <div>
+      <h3 id="legendTitle">Temperature</h3>
+      <div class="legend">
+        <div class="bar" id="legendBar"></div>
+        <div class="ticks"><span id="tickLo">-</span><span id="tickHi">-</span></div>
+      </div>
+      </div>
+      <div>
+        <h3>Whole room</h3>
+        <div class="stat"><span>min</span><b class="mono" id="sMin">-</b></div>
+        <div class="stat"><span>mean</span><b class="mono" id="sMean">-</b></div>
+        <div class="stat"><span>max</span><b class="mono" id="sMax">-</b></div>
+      </div>
+      <div>
+      <h3>By zone</h3>
+      <div class="zonegrid" id="zoneGrid"></div>
+      <div class="note" id="solverNote">&nbsp;</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- >>> AI-AGENT EDIT ZONE: STATEMENT >>>
+     Page 4 of Diagram Blank.ai. Placeholder copy - the student replaces every
+     word of this with their own position. Do not write it for them unless
+     asked; if asked, it belongs here and nowhere else. -->
+<section class="statement">
+  <h2>Artistic statement</h2>
+  <div>
+  <p>Drink Atlas turns a gallery into a map of what we drink. Every system in
+  this room is driven by data about beer and cocktails, so the light, air and
+  warmth around you change with the drinks themselves. You are not looking at
+  a chart of the data. You are standing inside it.</p>
+  <p>The six ceiling lights trace where breweries cluster across the United
+  States, each zone brightening with the density of breweries it stands for.
+  The fan follows the strength of the selected drink, so a stiff pour moves
+  more air than a light one. The humidifier recreates the climate a drink
+  comes from, from the damp heat of the tropics to the dry air of the
+  highlands. The heat pump follows how a drink is prepared, warming or cooling
+  the room to match its method.</p>
+  <p>We usually meet these facts as small print on a label or a menu: alcohol
+  content, place of origin, a line of recipe. Here they become conditions you
+  can feel on your skin. The room draws on brewery locations through our
+  BreweryMap, drink recipes and strengths from TheCocktailDB, and climate data
+  from Open-Meteo.</p>
+  </div>
+</section>
+<!-- <<< END AI-AGENT EDIT ZONE: STATEMENT <<< -->
+
+<!-- ======================= SYSTEMS + GRAPHS ============================ -->
+<section>
+  <h2>The room&rsquo;s systems</h2>
+  <div class="systems" id="systemsRow"></div>
+  <div class="note">
+    Each graph is the last ~85&nbsp;s of room time measured at that unit:
+    heat pump reads air temperature, humidifier reads relative humidity, fan
+    reads wind speed, each can light reads the illuminance of its own zone.
+  </div>
+</section>
+
+<!-- Backstage: tools for building the piece, folded away for visitors. -->
+<details class="backstage">
+<summary>How it works <span>Data sources, rules, workflow and export</span></summary>
+
+<!-- ======================= LINKING ===================================== -->
+<section>
+  <h2>Inputs, rules and systems</h2>
+  <div class="linkGrid" id="linkGrid">
+    <div>
+      <h3>Live inputs</h3>
+      <div class="tableWrap"><table><thead><tr>
+        <th>Source</th><th>Value</th><th class="num">Trend</th>
+      </tr></thead><tbody id="apiBody"></tbody></table></div>
+      <div class="note">
+        Add a source in app.py &rarr; <span class="mono">API_REGISTRY</span>.
+        Synthetic feeds need no network; the rest are live endpoints.
+      </div>
+    </div>
+    <div>
+      <h3>Rules</h3>
+      <div class="tableWrap"><table class="rules"><thead><tr>
+        <th>System</th><th>Rule, as written in app.py</th><th class="num">Firing</th>
+      </tr></thead><tbody id="ruleBody"></tbody></table></div>
+      <div class="note" id="ruleUnits"></div>
+    </div>
+  </div>
+</section>
+
+<!-- ======================= WORKFLOW DIAGRAM ============================ -->
+<section>
+  <h2>Workflow</h2>
+  <!-- >>> AI-AGENT EDIT ZONE: WORKFLOW >>>
+       Page 1 of Diagram Blank.ai, made live. Hovering a box lists what is
+       actually moving through it right now; the travelling pips are throttled
+       to the real rate of each hop, so the JSON edge only fires when an export
+       is written. Add a box by adding to FLOW_NODES / FLOW_EDGES in the script
+       below - the layout is data, not markup. -->
+  <svg id="flow" viewBox="0 0 1210 440" role="img"
+       aria-label="API to Python to JSON to Grasshopper to Rhino, with Python also feeding the Website"></svg>
+  <!-- <<< END AI-AGENT EDIT ZONE: WORKFLOW <<< -->
+  <div id="flowInfo"><span class="muted">Hover a box to see what is linked into it and what is flowing out.</span></div>
+</section>
+
+<!-- ======================= EXPORT ====================================== -->
+<section>
+  <h2>JSON out</h2>
+  <div class="row" style="margin-bottom:10px">
+    <button class="btn" id="copyPlaceBtn">Copy placement for Claude</button>
+    <button class="btn" id="exportBtn">Write JSON to exports/</button>
+    <button class="btn" id="previewBtn">Preview payload</button>
+    <span class="sub" id="exportMsg"></span>
+  </div>
+  <pre class="out" id="exportOut">One file per system, written to exports/ . Grasshopper reads them with a File Read component on a timer.</pre>
+  <div class="note">
+    <b>Place mode</b> gives you the copy button: paste the result at Claude and
+    ask it to hard-code the layout into app.py.
+    <b>Simulate mode</b> runs that hard-coded layout and writes the JSON.
+  </div>
+</section>
+
+
+
+
+</details>
+
+<div class="note" id="footNote" style="text-align:center;padding-bottom:20px"></div>
+</div>
+
+<div id="tip"></div>
+
+<script>
+"use strict";
+/* ==========================================================================
+   AI-AGENT: the script is in six parts, in this order.
+     1  colour ramps        turn a field value into a pixel
+     2  axon geometry       traced parallelogram + affine mapping
+     3  system glyphs       the line-art icons from the diagram
+     4  workflow diagram    boxes, edges, travelling pips
+     5  state + polling     talks to app.py
+     6  wiring              buttons, drag, tables, export
+   Nothing here computes physics. If a number looks wrong, it is wrong in
+   app.py.
+   ======================================================================== */
+
+/* -- 1 ------------------------------------------------------------------
+   >>> AI-AGENT EDIT ZONE: FIELD_RAMPS >>>
+   Ramps are declared in OKLCH, not hex, and converted at load. That is on
+   purpose: OKLCH lets us guarantee the two things a magnitude ramp must have
+   and hex cannot express - lightness that moves monotonically from one end to
+   the other, and even perceptual spacing, so equal steps in the data look like
+   equal steps on screen.
+
+   temperature is DIVERGING: cold blue, warm red, near-neutral at the 21 C
+   comfort point, which is exactly the argument of this assignment - you read
+   deviation from comfort in both directions. The other three are magnitude,
+   so they are SEQUENTIAL: one hue, light to dark, never a rainbow.
+   L is lightness 0-1, C chroma, H hue angle in degrees.                    */
+const RAMPS = {
+  temperature: { type:"diverge", mid:0.5,
+    cold:[0.78,0.110,250], neutralCold:[0.30,0.010,250],
+    neutralWarm:[0.30,0.010,60], warm:[0.76,0.150,40] },
+  humidity:    { type:"seq", from:[0.26,0.020,245], to:[0.86,0.090,230] },
+  wind:        { type:"seq", from:[0.26,0.020,292], to:[0.86,0.080,292] },
+  light:       { type:"heatmap", stops:[
+    [0.00, [0.250, 0.020, 50]],   // dark wood (sparse / shadow)
+    [0.30, [0.420, 0.130, 30]],   // deep ruby (moderate brewery density)
+    [0.60, [0.600, 0.165, 45]],   // copper (high brewery density)
+    [0.85, [0.780, 0.150, 70]],   // amber (very high density)
+    [1.00, [0.930, 0.090, 90]]    // pale gold glow (peak hotspot)
+  ] }
+};
+const FIELD_LABEL = { temperature:"Temperature", humidity:"Humidity",
+                      wind:"Wind speed", light:"Light · Brewery Heat Map" };
+const FIELD_UNIT  = { temperature:"°C", humidity:"%", wind:"m/s", light:"lux" };
+/* <<< END AI-AGENT EDIT ZONE: FIELD_RAMPS <<< */
+
+function srgbEncode(x){
+  return x <= 0.0031308 ? 12.92*x : 1.055*Math.pow(x, 1/2.4) - 0.055;
+}
+function oklchToRgb(L, C, Hdeg){
+  const h = Hdeg*Math.PI/180, a = C*Math.cos(h), b = C*Math.sin(h);
+  const l_ = L + 0.3963377774*a + 0.2158037573*b;
+  const m_ = L - 0.1055613458*a - 0.0638541728*b;
+  const s_ = L - 0.0894841775*a - 1.2914855480*b;
+  const l = l_*l_*l_, m = m_*m_*m_, s = s_*s_*s_;
+  return [
+    srgbEncode( 4.0767416621*l - 3.3077115913*m + 0.2309699292*s),
+    srgbEncode(-1.2684380046*l + 2.6097574011*m - 0.3413193965*s),
+    srgbEncode(-0.0041960863*l - 0.7034186147*m + 1.7076147010*s)
+  ];
+}
+/* Reduce chroma until the colour is inside sRGB. Keeps hue and lightness,
+   which is what matters for a ramp; only saturation gives way. */
+function oklchToRgb255(L, C, H){
+  let lo = 0, hi = C, rgb = oklchToRgb(L, C, H);
+  const inGamut = c => c.every(v => v >= -0.0005 && v <= 1.0005);
+  if(!inGamut(rgb)){
+    for(let i=0;i<18;i++){
+      const mid=(lo+hi)/2; rgb=oklchToRgb(L,mid,H);
+      if(inGamut(rgb)) lo=mid; else hi=mid;
+    }
+    rgb = oklchToRgb(L, lo, H);
+  }
+  return rgb.map(v => Math.max(0, Math.min(255, Math.round(v*255))));
+}
+const lerp = (a,b,t) => a + (b-a)*t;
+function lerpLch(A, B, t){
+  return [lerp(A[0],B[0],t), lerp(A[1],B[1],t), lerp(A[2],B[2],t)];
+}
+/* 256-entry lookup per field, built once. */
+const LUT = {};
+for(const key in RAMPS){
+  const spec = RAMPS[key], lut = new Uint8ClampedArray(256*3);
+  for(let i=0;i<256;i++){
+    const t = i/255;
+    let lch;
+    if(spec.type === "seq"){
+      lch = lerpLch(spec.from, spec.to, t);
+    } else if(spec.type === "heatmap"){
+      const stops = spec.stops;
+      let sIdx = 0;
+      while(sIdx < stops.length - 2 && t > stops[sIdx+1][0]) sIdx++;
+      const s0 = stops[sIdx], s1 = stops[sIdx+1];
+      const frac = Math.max(0, Math.min(1, (t - s0[0]) / (s1[0] - s0[0] + 1e-9)));
+      lch = lerpLch(s0[1], s1[1], frac);
+    } else {
+      /* Each arm keeps its own hue end to end; only lightness and chroma
+         move. Interpolating hue across the midpoint would swing 250 -> 28
+         the long way round and put green in the middle of a blue-red ramp. */
+      lch = t < spec.mid
+        ? lerpLch(spec.cold, spec.neutralCold, t/spec.mid)
+        : lerpLch(spec.neutralWarm, spec.warm, (t-spec.mid)/(1-spec.mid));
+    }
+    const c = oklchToRgb255(lch[0], lch[1], lch[2]);
+    lut[i*3]=c[0]; lut[i*3+1]=c[1]; lut[i*3+2]=c[2];
+  }
+  LUT[key] = lut;
+}
+function rampCss(key){
+  const lut = LUT[key], stops = [];
+  for(let i=0;i<=10;i++){
+    const k = Math.round(i*25.5);
+    stops.push(`rgb(${lut[k*3]},${lut[k*3+1]},${lut[k*3+2]}) ${i*10}%`);
+  }
+  return `linear-gradient(to right, ${stops.join(",")})`;
+}
+
+/* -- 2 ------------------------------------------------------------------
+   >>> AI-AGENT EDIT ZONE: ROOM3D >>>
+   The gallery viewer. Orbit with the mouse; the three surfaces facing you are
+   culled so you are always looking INTO the room.
+
+   Projection is ORTHOGRAPHIC, not perspective, for three reasons: it keeps the
+   drawing an axonometric like the one in Diagram Blank.ai, parallel walls stay
+   parallel so the room reads as measured rather than photographed, and - the
+   practical one - a horizontal rectangle projects to a parallelogram, so the
+   simulation field can be painted onto the slice plane with a single affine
+   transform instead of per-pixel projection.
+
+   Camera basis, from azimuth a and elevation e:
+       Cdir (scene -> camera) = (cos e cos a,  cos e sin a,  sin e)
+       R    (screen right)    = (-sin a,       cos a,        0    )
+       Up   (screen up)       = (-sin e cos a, -sin e sin a, cos e )
+   A face is hidden when its outward normal points at the camera, i.e.
+   dot(n, Cdir) > 0. For any generic direction exactly three of the six box
+   faces satisfy that - which is the "three walls disappear" behaviour.
+
+   World axes: +x across the room, +y toward the back, +z up from the floor.
+   There is no hand-tuned geometry left in this file; change the room in
+   app.py and the viewer follows.                                           */
+const VIEW = {
+  az: -37, el: 26,        // degrees; the default reads like an architectural axon
+  zoom: 1,
+  azHome: -37, elHome: 26, zoomHome: 1,
+  minEl: 8, maxEl: 86,    // keep sin(e) away from 0 so screen->world stays solvable
+  /* Drag direction, as if you had a hand on the room itself: drag right and it
+     turns to the right, drag down and it tips toward you so you rise over the
+     top of it. Negate either number to reverse that axis on its own. */
+  orbitX: -0.45, orbitY: 0.32
+};
+const SLICE_Z = 1.2;      // m, occupant height - the plane the solver represents
+
+function camBasis(v){
+  const a = v.az*Math.PI/180, e = v.el*Math.PI/180;
+  const ca=Math.cos(a), sa=Math.sin(a), ce=Math.cos(e), se=Math.sin(e);
+  return {ca,sa,ce,se, dir:[ce*ca, ce*sa, se]};
+}
+/* world metres -> unscaled screen units (y down) */
+function proj(X, Y, Z, B, C){
+  const x = X-C[0], y = Y-C[1], z = Z-C[2];
+  return [ -x*B.sa + y*B.ca,
+            x*B.se*B.ca + y*B.se*B.sa - z*B.ce ];
+}
+const depthOf = (X,Y,Z,B,C) =>
+  (X-C[0])*B.dir[0] + (Y-C[1])*B.dir[1] + (Z-C[2])*B.dir[2];
+
+/* Build everything the renderer and the hit-tester need for one frame. */
+function makeView(w, h){
+  const W = S.cfg.room.w, D = S.cfg.room.d, H = S.cfg.room.h;
+  const C = [W/2, D/2, H/2];
+  const B = camBasis(VIEW);
+  let x0=1e9, y0=1e9, x1=-1e9, y1=-1e9;
+  for(const X of [0,W]) for(const Y of [0,D]) for(const Z of [0,H]){
+    const p = proj(X,Y,Z,B,C);
+    x0=Math.min(x0,p[0]); x1=Math.max(x1,p[0]);
+    y0=Math.min(y0,p[1]); y1=Math.max(y1,p[1]);
+  }
+  const s = Math.min(w*0.86/(x1-x0), h*0.86/(y1-y0)) * VIEW.zoom;
+  return {
+    W, D, H, C, B, s,
+    cx: w/2 - ((x0+x1)/2)*s,
+    cy: h/2 - ((y0+y1)/2)*s,
+    P(X,Y,Z){ const p = proj(X,Y,Z,this.B,this.C);
+              return [this.cx + p[0]*this.s, this.cy + p[1]*this.s]; },
+    depth(X,Y,Z){ return depthOf(X,Y,Z,this.B,this.C); }
+  };
+}
+/* screen point -> world point on the horizontal plane z = Zplane.
+   Inverts the projection above; needs sin(e) != 0, hence VIEW.minEl. */
+function unproject(sx, sy, V, Zplane){
+  const A = (sx - V.cx)/V.s;
+  const Bv = ((sy - V.cy)/V.s + (Zplane - V.C[2])*V.B.ce) / V.B.se;
+  const x = Bv*V.B.ca - A*V.B.sa;
+  const y = Bv*V.B.sa + A*V.B.ca;
+  return [x + V.C[0], y + V.C[1]];
+}
+
+/* The six box faces, as outward normal + corner loop. */
+function boxFaces(W, D, H){
+  return [
+    {id:"floor",   n:[0,0,-1], pts:[[0,0,0],[W,0,0],[W,D,0],[0,D,0]]},
+    {id:"ceiling", n:[0,0, 1], pts:[[0,0,H],[W,0,H],[W,D,H],[0,D,H]]},
+    {id:"front",   n:[0,-1,0], pts:[[0,0,0],[W,0,0],[W,0,H],[0,0,H]]},
+    {id:"back",    n:[0, 1,0], pts:[[0,D,0],[W,D,0],[W,D,H],[0,D,H]]},
+    {id:"left",    n:[-1,0,0], pts:[[0,0,0],[0,D,0],[0,D,H],[0,0,H]]},
+    {id:"right",   n:[ 1,0,0], pts:[[W,0,0],[W,D,0],[W,D,H],[W,0,H]]}
+  ];
+}
+/* <<< END AI-AGENT EDIT ZONE: ROOM3D <<< */
+
+/* -- 3 ------------------------------------------------------------------
+   System glyphs, redrawn from page 3 of Diagram Blank.ai. Pure line art in
+   --ink: identity here is SHAPE, never colour. */
+const GLYPH = {
+heat_pump:`<svg viewBox="0 0 120 100" fill="none" stroke="currentColor" stroke-width="5" stroke-linejoin="round">
+<rect x="8" y="12" width="84" height="60" rx="5"/><path d="M92 18l10 8v40l-10 8"/>
+<circle cx="42" cy="42" r="23"/><circle cx="42" cy="42" r="5" fill="currentColor"/>
+<path d="M42 19v46M19 42h46M26 26l32 32M58 26L26 58" stroke-width="3.5"/>
+<rect x="66" y="22" width="18" height="9" rx="2"/><rect x="66" y="37" width="18" height="9" rx="2"/>
+<rect x="66" y="52" width="18" height="9" rx="2"/>
+<path d="M16 72v10M84 72v10M6 82h94" stroke-linecap="round"/></svg>`,
+humidifier:`<svg viewBox="0 0 120 100" fill="none" stroke="currentColor" stroke-width="5" stroke-linejoin="round">
+<path d="M36 14h48v4h6v62h-6v6H36v-6h-6V18h6z"/>
+<path d="M42 26h36M42 36h36M42 46h36" stroke-width="4"/>
+<circle cx="60" cy="64" r="13"/><path d="M51 73l18-18" stroke-width="4"/>
+<path d="M60 54c-4 5-6 8-6 11a6 6 0 0012 0c0-3-2-6-6-11z" stroke-width="3.5"/>
+<path d="M40 88h40" stroke-linecap="round"/></svg>`,
+fan:`<svg viewBox="0 0 120 100" fill="none" stroke="currentColor" stroke-width="5" stroke-linejoin="round">
+<rect x="14" y="8" width="80" height="74" rx="4"/><circle cx="54" cy="45" r="30"/>
+<path d="M54 45c0-14 4-22 12-22s12 7 8 16-12 8-20 6z"/>
+<path d="M54 45c12 7 15 15 11 22s-13 6-17-3 1-14 6-19z"/>
+<path d="M54 45c-12-7-20-6-24 1s1 13 11 13 11-8 13-14z"/>
+<circle cx="54" cy="45" r="6" fill="currentColor" stroke="none"/>
+<path d="M24 82v8h8v-8M76 82v8h8v-8" stroke-linecap="round"/></svg>`,
+can_light:`<svg viewBox="0 0 120 100" fill="none" stroke="currentColor" stroke-width="5" stroke-linecap="round" stroke-linejoin="round">
+<path d="M30 20h60"/><path d="M40 20v10h40V20"/><rect x="48" y="30" width="24" height="18" rx="3"/>
+<path d="M40 64l6-8M60 68v-10M80 64l-6-8"/></svg>`
+};
+const TYPE_NAME = { heat_pump:"Heat pump", humidifier:"Humidifier / dehumidifier",
+                    fan:"Fan", can_light:"Can lights" };
+/* which field each system type is judged by */
+const TYPE_FIELD = { heat_pump:"temperature", humidifier:"humidity",
+                     fan:"wind", can_light:"light" };
+const SETPOINT_UNIT = { heat_pump:"°C target", humidifier:"%RH target",
+                        fan:"m/s", can_light:"intensity 0–1" };
+/* Short form for inside a written-out rule, where "1 0-1" reads badly. */
+const SETPOINT_SUFFIX = { heat_pump:"°C", humidifier:"%RH",
+                          fan:"m/s", can_light:"" };
+
+/* -- 4 ------------------------------------------------------------------
+   Workflow diagram. Layout is data; the SVG is generated from it. */
+const FLOW_NODES = {
+  api:   {x: 22, y: 33, w:265, h:157, label:"API"},
+  py:    {x:322, y: 33, w:268, h:157, label:"Python"},
+  json:  {x:628, y: 33, w:267, h:157, label:"JSON"},
+  gh:    {x:930, y: 33, w:267, h:157, label:"Grasshopper"},
+  site:  {x:322, y:233, w:268, h:157, label:"Website"},
+  rhino: {x:930, y:233, w:267, h:157, label:"Rhino"}
+};
+const FLOW_EDGES = [
+  {id:"api_py",   from:"api",  to:"py",    dir:"h"},
+  {id:"py_json",  from:"py",   to:"json",  dir:"h"},
+  {id:"json_gh",  from:"json", to:"gh",    dir:"h"},
+  {id:"py_site",  from:"py",   to:"site",  dir:"v"},
+  {id:"gh_rhino", from:"gh",   to:"rhino", dir:"v"}
+];
+
+/* -- 5 ------------------------------------------------------------------
+   State + polling. */
+const S = {
+  cfg:null, frame:null, field:"temperature", mode:"simulate",
+  dragging:null, hoverSys:null, hoverNode:null, pending:{}, screenPos:{}, view:null,
+  lastExportAt:0, pollFails:0
+};
+const $  = s => document.querySelector(s);
+const $$ = s => Array.from(document.querySelectorAll(s));
+const fmt = (v, d=1) => (v===null||v===undefined||Number.isNaN(v)) ? "–" : Number(v).toFixed(d);
+
+async function jget(u){ const r = await fetch(u); if(!r.ok) throw new Error(r.status); return r.json(); }
+async function jpost(u, body){
+  const r = await fetch(u, {method:"POST", headers:{"Content-Type":"application/json"},
+                           body:JSON.stringify(body||{})});
+  if(!r.ok) throw new Error(r.status);
+  return r.json();
+}
+
+/* ---------- room rendering ---------- */
+const axon = $("#axon"), actx = axon.getContext("2d");
+const off  = document.createElement("canvas");
+let offCtx = null, offImg = null;
+
+function sizeCanvas(){
+  const dpr = Math.min(2, window.devicePixelRatio || 1);
+  const w = Math.max(240, axon.clientWidth);
+  const h = Math.round(w*0.66);
+  axon.style.height = h + "px";
+  if(axon.width !== Math.round(w*dpr) || axon.height !== Math.round(h*dpr)){
+    axon.width  = Math.round(w*dpr);
+    axon.height = Math.round(h*dpr);
+  }
+  return {w, h, dpr};
+}
+
+/* Repaint the field texture into the offscreen buffer. */
+function fieldTexture(fr){
+  const nx = fr.nx, ny = fr.ny;
+  if(!offCtx || off.width !== nx || off.height !== ny){
+    off.width = nx; off.height = ny;
+    offCtx = off.getContext("2d");
+    offImg = offCtx.createImageData(nx, ny);
+  }
+  const bin = atob(fr.data), px = offImg.data, lut = LUT[fr.field];
+  for(let k=0;k<nx*ny;k++){
+    const v = bin.charCodeAt(k), o = k*4;
+    px[o]=lut[v*3]; px[o+1]=lut[v*3+1]; px[o+2]=lut[v*3+2]; px[o+3]=255;
+  }
+  offCtx.putImageData(offImg, 0, 0);
+  return off;
+}
+
+function drawRoom(){
+  if(!S.cfg) return;
+  const {w, h, dpr} = sizeCanvas();
+  const fr = S.frame;
+  const V = makeView(w, h);
+  S.view = V;                                   // hit-testing reuses this
+
+  actx.setTransform(dpr,0,0,dpr,0,0);
+  actx.clearRect(0,0,w,h);
+
+  const css   = getComputedStyle(document.body);
+  const ink   = css.getPropertyValue("--ink").trim();
+  const ink3  = css.getPropertyValue("--ink-3").trim();
+  const rule  = css.getPropertyValue("--rule-2").trim();
+  const surf  = css.getPropertyValue("--surface").trim();
+  const surf2 = css.getPropertyValue("--surface-2").trim();
+  const accent= css.getPropertyValue("--accent").trim();
+  const FONT  = css.getPropertyValue("--font");
+
+  const poly = pts => {
+    actx.beginPath();
+    pts.forEach((p,i) => { const q = V.P(p[0],p[1],p[2]);
+                           i ? actx.lineTo(q[0],q[1]) : actx.moveTo(q[0],q[1]); });
+    actx.closePath();
+  };
+
+  /* ---- 1. the shell, minus the three faces pointed at the camera ---- */
+  const faces = boxFaces(V.W, V.D, V.H)
+    .filter(f => (f.n[0]*V.B.dir[0] + f.n[1]*V.B.dir[1] + f.n[2]*V.B.dir[2]) <= 0)
+    .map(f => {
+      const c = f.pts.reduce((a,p) => [a[0]+p[0]/4, a[1]+p[1]/4, a[2]+p[2]/4], [0,0,0]);
+      f.d = V.depth(c[0], c[1], c[2]);
+      return f;
+    })
+    .sort((a,b) => a.d - b.d);                  // farthest first
+
+  for(const f of faces){
+    poly(f.pts);
+    actx.fillStyle = f.id === "floor" ? surf2 : surf;
+    actx.fill();
+    actx.strokeStyle = rule; actx.lineWidth = 1; actx.stroke();
+  }
+
+  /* ---- 2. zone grid, drawn on the floor ---- */
+  actx.strokeStyle = rule; actx.lineWidth = 1; actx.setLineDash([5,4]);
+  for(let c=1;c<3;c++){
+    const a = V.P(V.W*c/3, 0, 0), b = V.P(V.W*c/3, V.D, 0);
+    actx.beginPath(); actx.moveTo(...a); actx.lineTo(...b); actx.stroke();
+  }
+  const ma = V.P(0, V.D/2, 0), mb = V.P(V.W, V.D/2, 0);
+  actx.beginPath(); actx.moveTo(...ma); actx.lineTo(...mb); actx.stroke();
+  actx.setLineDash([]);
+
+  if(!fr){ return; }
+
+  /* ---- 3. the simulated slice, floated at occupant height ----
+     Under an orthographic camera the slice is a parallelogram, so one affine
+     transform paints the whole field onto it - no per-pixel projection. */
+  const p00 = V.P(0, 0, SLICE_Z), p10 = V.P(V.W, 0, SLICE_Z),
+        p01 = V.P(0, V.D, SLICE_Z), p11 = V.P(V.W, V.D, SLICE_Z);
+  const U = [p10[0]-p00[0], p10[1]-p00[1]];
+  const Vv= [p01[0]-p00[0], p01[1]-p00[1]];
+  const tex = fieldTexture(fr);
+
+  actx.save();
+  actx.beginPath();
+  actx.moveTo(...p00); actx.lineTo(...p10); actx.lineTo(...p11); actx.lineTo(...p01);
+  actx.closePath();
+  actx.clip();
+  actx.globalAlpha = 0.95;
+  actx.transform(U[0]/fr.nx, U[1]/fr.nx, Vv[0]/fr.ny, Vv[1]/fr.ny, p00[0], p00[1]);
+  actx.imageSmoothingEnabled = true;
+  actx.imageSmoothingQuality = "high";
+  actx.drawImage(tex, 0, 0, fr.nx, fr.ny);
+  actx.restore();
+
+  actx.beginPath();
+  actx.moveTo(...p00); actx.lineTo(...p10); actx.lineTo(...p11); actx.lineTo(...p01);
+  actx.closePath();
+  actx.strokeStyle = ink3; actx.lineWidth = 1; actx.stroke();
+
+  /* ---- 4. systems, depth-sorted so near ones sit on top ---- */
+  actx.textAlign = "center"; actx.textBaseline = "middle";
+  function haloText(txt, x, y, px, weight){
+    actx.font = `${weight} ${px}px ${FONT}`;
+    actx.lineWidth = 3; actx.lineJoin = "round";
+    actx.strokeStyle = surf; actx.strokeText(txt, x, y);
+    actx.fillStyle = ink;    actx.fillText(txt, x, y);
+  }
+
+  const drawn = fr.systems.map(s => {
+    const z = s.type === "can_light" ? V.H : SLICE_Z;
+    return {s, z, d: V.depth(s.x, s.y, z), p: V.P(s.x, s.y, z)};
+  }).sort((a,b) => a.d - b.d);
+  S.screenPos = {};
+  for(const it of drawn) S.screenPos[it.s.id] = it.p;
+
+  for(const {s, z, p} of drawn){
+    const hot  = (S.hoverSys === s.id) || (S.dragging === s.id);
+    const mark = hot ? accent : ink;
+
+    if(s.type === "can_light"){
+      /* dashed drop line to the slice, so it reads as ceiling-mounted */
+      const foot = V.P(s.x, s.y, SLICE_Z);
+      actx.strokeStyle = ink3; actx.lineWidth = 1; actx.setLineDash([3,3]);
+      actx.beginPath(); actx.moveTo(...p); actx.lineTo(...foot); actx.stroke();
+      actx.setLineDash([]);
+
+      actx.beginPath(); actx.arc(p[0], p[1], 8, 0, Math.PI*2);
+      actx.fillStyle = surf; actx.fill();
+      actx.strokeStyle = mark; actx.lineWidth = hot ? 2.2 : 1.3; actx.stroke();
+      /* inner disc scales with output: brightness read without using colour */
+      actx.beginPath(); actx.arc(p[0], p[1], 1.4 + 5.6*s.output, 0, Math.PI*2);
+      actx.fillStyle = mark; actx.fill();
+      const reg = s.label.includes("·") ? s.label.split("·")[1].trim() : ("Z"+s.zone);
+      haloText(`Z${s.zone} · ${reg}`, p[0], p[1]-15, 9.0, 600);
+      continue;
+    }
+
+    /* discharge arrow, drawn in the slice plane and projected with it */
+    const th = s.rot*Math.PI/180;
+    const reach = s.type === "fan"
+      ? 0.5 + 2.2*Math.min(1, s.output/4)
+      : 0.5 + 1.1*Math.min(1, Math.abs(s.output)/(s.type==="heat_pump"?9000:0.0016));
+    const tail = V.P(s.x + Math.cos(th)*0.32, s.y + Math.sin(th)*0.32, z);
+    const tip  = V.P(s.x + Math.cos(th)*reach, s.y + Math.sin(th)*reach, z);
+    let ux = tip[0]-tail[0], uy = tip[1]-tail[1];
+    const ul = Math.hypot(ux,uy) || 1; ux/=ul; uy/=ul;
+
+    actx.strokeStyle = mark; actx.lineWidth = 1.8; actx.lineCap = "round";
+    actx.beginPath(); actx.moveTo(...tail); actx.lineTo(...tip); actx.stroke();
+    const hs = 5;
+    actx.beginPath();
+    actx.moveTo(tip[0], tip[1]);
+    actx.lineTo(tip[0]-ux*hs-uy*hs*0.62, tip[1]-uy*hs+ux*hs*0.62);
+    actx.lineTo(tip[0]-ux*hs+uy*hs*0.62, tip[1]-uy*hs-ux*hs*0.62);
+    actx.closePath(); actx.fillStyle = mark; actx.fill();
+
+    /* a short stalk down to the floor, so height is legible */
+    const base = V.P(s.x, s.y, 0);
+    actx.strokeStyle = ink3; actx.lineWidth = 1; actx.setLineDash([3,3]);
+    actx.beginPath(); actx.moveTo(...p); actx.lineTo(...base); actx.stroke();
+    actx.setLineDash([]);
+    actx.beginPath(); actx.arc(base[0], base[1], 1.6, 0, Math.PI*2);
+    actx.fillStyle = ink3; actx.fill();
+
+    const r = 6 + 3*s.power;
+    actx.beginPath(); actx.rect(p[0]-r, p[1]-r, r*2, r*2);
+    actx.fillStyle = surf; actx.fill();
+    actx.strokeStyle = mark; actx.lineWidth = hot ? 2.4 : 1.5; actx.stroke();
+    haloText(s.label, p[0], p[1]+r+8, 9, 700);
+  }
+
+  /* ---- 5. dimension labels, pushed clear of the room in SCREEN space ----
+     A fixed world-space offset works at one camera angle and collides at the
+     next, so each label rides the outward normal of its own floor edge. */
+  actx.font = `600 9.5px ${FONT}`;
+  actx.fillStyle = ink3;
+  const mid = V.P(V.W/2, V.D/2, 0);
+  const edgeLabel = (txt, ax, ay, bx, by) => {
+    const A = V.P(ax, ay, 0), Bp = V.P(bx, by, 0);
+    const mx = (A[0]+Bp[0])/2, my = (A[1]+Bp[1])/2;
+    let nx = -(Bp[1]-A[1]), ny = Bp[0]-A[0];
+    const nl = Math.hypot(nx, ny) || 1; nx /= nl; ny /= nl;
+    if((mx-mid[0])*nx + (my-mid[1])*ny < 0){ nx = -nx; ny = -ny; }
+    actx.fillText(txt, mx + nx*18, my + ny*18);
+  };
+  /* Dimension each axis on whichever of its two floor edges is NEAREST the
+     camera. The body of the box rises away from that edge, so "outward" is
+     genuinely outside; on the far edge it would point back into the room. */
+  const nearer = (e1, e2) =>
+    V.depth((e1[0]+e1[2])/2, (e1[1]+e1[3])/2, 0) >=
+    V.depth((e2[0]+e2[2])/2, (e2[1]+e2[3])/2, 0) ? e1 : e2;
+  const wEdge = nearer([0,0,V.W,0], [0,V.D,V.W,V.D]);
+  const dEdge = nearer([0,0,0,V.D], [V.W,0,V.W,V.D]);
+  edgeLabel(`${V.W} m`, wEdge[0], wEdge[1], wEdge[2], wEdge[3]);
+  edgeLabel(`${V.D} m`, dEdge[0], dEdge[1], dEdge[2], dEdge[3]);
+}
+
+/* ---------- orbit + place-mode interaction ---------- */
+function canvasXY(e){
+  const r = axon.getBoundingClientRect();
+  return [e.clientX - r.left, e.clientY - r.top];
+}
+/* Hit-test in SCREEN space: project every unit and take the nearest. Works
+   the same at any camera angle, which a world-space test would not. */
+function pickSystem(e, movableOnly){
+  if(!S.frame || !S.screenPos) return null;
+  const [mx,my] = canvasXY(e);
+  let best = null, bd = 1e9;
+  for(const s of S.frame.systems){
+    if(movableOnly && s.type === "can_light") continue;
+    const p = S.screenPos[s.id]; if(!p) continue;
+    const d = Math.hypot(p[0]-mx, p[1]-my);
+    if(d < bd){ bd = d; best = s; }
+  }
+  return bd < 22 ? best : null;
+}
+function initInteraction(){
+  let orbit = null;
+
+  axon.addEventListener("mousedown", e => {
+    const hit = S.mode === "place" ? pickSystem(e, true) : null;
+    if(hit){
+      S.dragging = hit.id;
+      axon.style.cursor = "grabbing";
+    } else {
+      orbit = {x:e.clientX, y:e.clientY, az:VIEW.az, el:VIEW.el};
+      axon.style.cursor = "grabbing";
+    }
+    e.preventDefault();
+  });
+
+  window.addEventListener("mousemove", e => {
+    if(orbit){
+      VIEW.az = orbit.az + (e.clientX - orbit.x)*VIEW.orbitX;
+      VIEW.el = Math.max(VIEW.minEl, Math.min(VIEW.maxEl,
+                 orbit.el + (e.clientY - orbit.y)*VIEW.orbitY));
+      drawRoom();
+      return;
+    }
+    if(S.dragging && S.frame && S.view){
+      const [mx,my] = canvasXY(e);
+      const [wx,wy] = unproject(mx, my, S.view, SLICE_Z);
+      const s = S.frame.systems.find(x => x.id === S.dragging);
+      if(s){
+        localEdit(s, {
+          x: Math.max(0.15, Math.min(S.cfg.room.w-0.15, wx)),
+          y: Math.max(0.15, Math.min(S.cfg.room.d-0.15, wy))
+        });
+        drawRoom(); queueSystems();
+      }
+      return;
+    }
+    if(e.target === axon){
+      const s = pickSystem(e, false);
+      const id = s ? s.id : null;
+      if(id !== S.hoverSys){ S.hoverSys = id; drawRoom(); }
+      axon.style.cursor = s && S.mode === "place" ? "grab"
+                        : (S.mode === "place" ? "crosshair" : "grab");
+      if(s){
+        const f = TYPE_FIELD[s.type];
+        showTip(e, `${s.label}\n${fmt(s.x,2)}, ${fmt(s.y,2)} m` +
+          (s.type==="can_light" ? "  (ceiling)" : `  rot ${Math.round(s.rot)}°`) +
+          `\nreads ${fmt(s.reading,2)} ${FIELD_UNIT[f]}` +
+          `\nsetpoint ${fmt(s.setpoint,2)} ${SETPOINT_UNIT[s.type]}` +
+          (s.rule ? `\nrule ${s.rule_true?"TRUE":"false"}` : "\nno rule"));
+      } else hideTip();
+    } else if(S.hoverSys){
+      S.hoverSys = null; hideTip(); drawRoom();
+    }
+  });
+
+  window.addEventListener("mouseup", () => {
+    if(orbit){ orbit = null; axon.style.cursor = "grab"; updateViewNote(); }
+    if(S.dragging){ S.dragging = null; axon.style.cursor = "grab"; pushSystems(); }
+  });
+
+  /* Wheel over a unit in place mode edits that unit; anywhere else it zooms. */
+  axon.addEventListener("wheel", e => {
+    const step = Math.sign(e.deltaY);
+    const s = S.mode === "place" ? pickSystem(e, false) : null;
+    e.preventDefault();
+    if(s){
+      if(e.shiftKey || s.type === "can_light"){
+        localEdit(s, {power: Math.max(0, Math.min(1, s.power - step*0.05))});
+      } else {
+        localEdit(s, {rot: (s.rot - step*15 + 360) % 360});
+      }
+      drawRoom(); queueSystems();
+    } else {
+      VIEW.zoom = Math.max(0.5, Math.min(2.6, VIEW.zoom * (step > 0 ? 0.92 : 1.087)));
+      drawRoom(); updateViewNote();
+    }
+  }, {passive:false});
+
+  axon.addEventListener("dblclick", resetView);
+  axon.addEventListener("mouseleave", () => {
+    if(!S.dragging && S.hoverSys){ S.hoverSys = null; hideTip(); drawRoom(); }
+  });
+  axon.style.cursor = "grab";
+}
+function resetView(){
+  VIEW.az = VIEW.azHome; VIEW.el = VIEW.elHome; VIEW.zoom = VIEW.zoomHome;
+  drawRoom(); updateViewNote();
+}
+function setView(az, el){
+  VIEW.az = az; VIEW.el = el; drawRoom(); updateViewNote();
+}
+function updateViewNote(){
+  const n = $("#viewNote");
+  if(n) n.textContent =
+    `azimuth ${Math.round(((VIEW.az%360)+360)%360)}° · ` +
+    `elevation ${Math.round(VIEW.el)}° · zoom ${VIEW.zoom.toFixed(2)}×`;
+}
+
+/* ---------- sparklines ---------- */
+/* One series each, so no legend: the card title names it. Black 2px on white,
+   exactly like the printed template. Hover gives a crosshair + readout. */
+function drawSpark(cv, series, lo, hi, unit){
+  const dpr = window.devicePixelRatio || 1;
+  const cssW = cv.clientWidth || 200, cssH = cv.clientHeight || 60;
+  if(cv.width !== Math.round(cssW*dpr) || cv.height !== Math.round(cssH*dpr)){
+    cv.width = Math.round(cssW*dpr); cv.height = Math.round(cssH*dpr);
+  }
+  const g = cv.getContext("2d");
+  g.setTransform(dpr,0,0,dpr,0,0);
+  const css = getComputedStyle(document.body);
+  g.clearRect(0,0,cssW,cssH);
+
+  if(!series || series.length < 2){
+    g.fillStyle = css.getPropertyValue("--ink-3");
+    g.font = "10px " + css.getPropertyValue("--font");
+    g.textAlign="center"; g.textBaseline="middle";
+    g.fillText("collecting…", cssW/2, cssH/2);
+    return;
+  }
+  /* Scale to the data, but never collapse onto a flat line: keep a floor of
+     5 % of the field's own display range so a steady reading looks steady. */
+  let mn = Math.min(...series), mx = Math.max(...series);
+  const floor = (hi-lo)*0.05;
+  if(mx-mn < floor){ const c=(mx+mn)/2; mn=c-floor/2; mx=c+floor/2; }
+  const pad = (mx-mn)*0.14; mn -= pad; mx += pad;
+
+  const X = i => (i/(series.length-1))*(cssW-2)+1;
+  const Y = v => cssH-2 - ((v-mn)/(mx-mn))*(cssH-4);
+
+  g.strokeStyle = css.getPropertyValue("--ink").trim();
+  g.lineWidth = 2; g.lineJoin="round"; g.lineCap="round";
+  g.beginPath();
+  series.forEach((v,i) => i ? g.lineTo(X(i),Y(v)) : g.moveTo(X(i),Y(v)));
+  g.stroke();
+
+  const hv = cv._hoverIdx;
+  if(hv !== undefined && hv !== null && hv>=0 && hv<series.length){
+    g.strokeStyle = css.getPropertyValue("--ink-3").trim();
+    g.lineWidth = 1;
+    g.beginPath(); g.moveTo(X(hv),0); g.lineTo(X(hv),cssH); g.stroke();
+    g.fillStyle = css.getPropertyValue("--ink").trim();
+    g.beginPath(); g.arc(X(hv),Y(series[hv]),3.2,0,Math.PI*2); g.fill();
+  }
+  cv._series = series; cv._unit = unit; cv._X = X;
+}
+
+/* ---------- systems row ---------- */
+function buildSystemsRow(){
+  const row = $("#systemsRow"); row.innerHTML = "";
+  for(const type of ["heat_pump","humidifier","fan","can_light"]){
+    const card = document.createElement("div");
+    card.className = "sysCard"; card.dataset.type = type;
+    card.innerHTML = `
+      <div class="icon">${GLYPH[type]}</div>
+      <div class="name">${TYPE_NAME[type]}</div>
+      <div class="meta" data-meta></div>
+      <div data-graphs></div>`;
+    row.appendChild(card);
+  }
+}
+function updateSystemsRow(){
+  const fr = S.frame; if(!fr) return;
+  for(const card of $$(".sysCard")){
+    const type = card.dataset.type;
+    const list = fr.systems.filter(s => s.type === type);
+    const holder = card.querySelector("[data-graphs]");
+    const meta   = card.querySelector("[data-meta]");
+    const field  = TYPE_FIELD[type];
+    const [lo,hi] = S.cfg.fields[field];
+
+    if(holder.childElementCount !== (type==="can_light" ? 1 : list.length)){
+      holder.innerHTML = "";
+      if(type === "can_light"){
+        const six = document.createElement("div");
+        six.className = "sixpack";
+        list.forEach(s => six.appendChild(makeGraph(s.id, 52)));
+        holder.appendChild(six);
+      } else if(list.length === 0){
+        holder.innerHTML = `<div class="graph" style="height:96px"></div>`;
+      } else {
+        list.forEach(s => holder.appendChild(makeGraph(s.id, 96)));
+      }
+    }
+    list.forEach(s => {
+      const cv = holder.querySelector(`canvas[data-for="${s.id}"]`);
+      if(cv) drawSpark(cv, s.history, lo, hi, FIELD_UNIT[field]);
+    });
+
+    if(type === "can_light"){
+      const on = list.filter(s => s.output > 0.25).length;
+      const linked = list.filter(s => s.rule).length;
+      meta.innerHTML =
+        `<div>${on}/6 zones active &middot; Regional Brewery Heat Map</div>` +
+        `<div class="tag"><span class="dot ${list.some(s=>s.rule_true)?"on":""}"></span>` +
+        `Airflow-reactive &middot; ${linked} linked to Open Brewery DB</div>`;
+    } else if(list.length){
+      meta.innerHTML = list.map(s => {
+        const out = type==="heat_pump" ? `${fmt(s.output/1000,2)} kW`
+                  : type==="humidifier" ? `${fmt(s.output*1000,3)} g/s`
+                  : `${fmt(s.output,2)} m/s`;
+        return `<div><b>${s.label}</b> &middot; ${fmt(s.reading,1)}${FIELD_UNIT[field]}
+          &middot; ${out}</div>
+          <div class="tag"><span class="dot ${s.rule_true?"on":""}"></span>
+          ${s.rule ? (s.rule_true ? "rule true" : "rule false")
+                   : "no rule &mdash; holding "+fmt(s.setpoint,1)}</div>`;
+      }).join("");
+    } else {
+      meta.innerHTML = `<span class="muted">none placed</span>`;
+    }
+  }
+}
+function makeGraph(id, h){
+  const d = document.createElement("div");
+  d.className = "graph"; d.style.height = h+"px";
+  d.innerHTML = `<canvas data-for="${id}"></canvas>`;
+  const cv = d.querySelector("canvas");
+  cv.addEventListener("mousemove", e => {
+    const r = cv.getBoundingClientRect();
+    const n = (cv._series||[]).length;
+    if(!n) return;
+    cv._hoverIdx = Math.max(0, Math.min(n-1,
+      Math.round(((e.clientX-r.left)/r.width)*(n-1))));
+    const v = cv._series[cv._hoverIdx];
+    const back = ((n-1-cv._hoverIdx)*0.35).toFixed(1);
+    showTip(e, `${fmt(v,2)} ${cv._unit||""}\n${back}s ago`);
+  });
+  cv.addEventListener("mouseleave", () => { cv._hoverIdx = null; hideTip(); });
+  return d;
+}
+function showTip(e, text){
+  const t = $("#tip");
+  t.textContent = text; t.style.display = "block";
+  t.style.left = Math.min(window.innerWidth-160, e.clientX+12)+"px";
+  t.style.top  = (e.clientY+14)+"px";
+}
+const hideTip = () => { $("#tip").style.display = "none"; };
+
+/* ---------- workflow diagram ---------- */
+function buildFlow(){
+  const svg = $("#flow");
+  const N = FLOW_NODES;
+  let s = "";
+  for(const e of FLOW_EDGES){
+    const a = N[e.from], b = N[e.to];
+    let x1,y1,x2,y2;
+    if(e.dir === "h"){
+      x1 = a.x+a.w; y1 = a.y+a.h/2; x2 = b.x; y2 = y1;
+    } else {
+      x1 = a.x+a.w/2; y1 = a.y+a.h; x2 = x1; y2 = b.y;
+    }
+    s += `<path class="edge" id="e_${e.id}" d="M${x1} ${y1} L${x2} ${y2}"
+            marker-end="url(#arw)"/>`;
+    e._p = [x1,y1,x2,y2];
+  }
+  for(const k in N){
+    const n = N[k];
+    /* shrink the label to fit its box - "Grasshopper" overruns at 46 */
+    const fs = Math.min(46, (n.w - 30) / (0.58 * n.label.length));
+    s += `<rect class="box" id="b_${k}" x="${n.x}" y="${n.y}" width="${n.w}"
+            height="${n.h}" rx="26"/>
+          <text x="${n.x+n.w/2}" y="${n.y+n.h/2+fs*0.35}"
+            font-size="${fs.toFixed(1)}">${n.label}</text>
+          <rect class="hit" data-node="${k}" x="${n.x}" y="${n.y}"
+            width="${n.w}" height="${n.h}"/>`;
+  }
+  s += `<g id="pips"></g>`;
+  svg.innerHTML =
+    `<defs><marker id="arw" viewBox="0 0 10 10" refX="9" refY="5"
+       markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+       <path d="M0 0L10 5L0 10z" class="pip"/></marker></defs>` + s;
+
+  svg.querySelectorAll(".hit").forEach(h => {
+    h.addEventListener("mouseenter", () => { S.hoverNode = h.dataset.node; renderFlowInfo(); });
+    h.addEventListener("mouseleave", () => { S.hoverNode = null; renderFlowInfo(); });
+  });
+}
+
+/* Pips travel at the real rate of each hop: fast where frames move, slow
+   where an API polls, and only on demand for the JSON write. */
+function pipRate(id){
+  const fr = S.frame;
+  if(!fr) return 0;
+  const live = (S.cfg.apis||[]).filter(a => {
+    const rec = fr.apis[a.id]; return rec && rec.value !== null;
+  }).length;
+  switch(id){
+    case "api_py":   return Math.min(2.2, 0.28*live);
+    case "py_site":  return S.mode === "simulate" ? 2.6 : 0.5;
+    case "py_json":  return (performance.now() - S.lastExportAt < 2500) ? 3 : 0;
+    case "json_gh":  return (performance.now() - S.lastExportAt < 2500) ? 3 : 0;
+    case "gh_rhino": return (performance.now() - S.lastExportAt < 2500) ? 3 : 0;
+  }
+  return 0;
+}
+const pipState = {};
+function animateFlow(ts){
+  const g = document.getElementById("pips");
+  if(g){
+    let out = "";
+    for(const e of FLOW_EDGES){
+      const rate = pipRate(e.id);
+      if(!pipState[e.id]) pipState[e.id] = [];
+      const arr = pipState[e.id];
+      if(rate > 0){
+        const last = arr.length ? arr[arr.length-1] : -1;
+        if(last < 0 || last > 1/(rate*0.9)) arr.push(0);
+      }
+      for(let i=arr.length-1;i>=0;i--){
+        arr[i] += 0.0065 * (1 + rate*0.35);
+        if(arr[i] > 1) arr.splice(i,1);
+      }
+      const [x1,y1,x2,y2] = e._p;
+      for(const t of arr){
+        out += `<circle class="pip" r="6"
+          cx="${x1+(x2-x1)*t}" cy="${y1+(y2-y1)*t}"/>`;
+      }
+    }
+    g.innerHTML = out;
+  }
+  requestAnimationFrame(animateFlow);
+}
+
+function renderFlowInfo(){
+  const box = $("#flowInfo"), fr = S.frame, k = S.hoverNode;
+  if(!k || !fr){
+    box.innerHTML = `<span class="muted">Hover a box to see what is linked into it and what is flowing out.</span>`;
+    $$("#flow .box").forEach(b => b.classList.remove("hot"));
+    return;
+  }
+  $$("#flow .box").forEach(b => b.classList.toggle("hot", b.id === "b_"+k));
+  const li = a => `<li>${a}</li>`;
+  let html = "";
+  if(k === "api"){
+    const rows = (S.cfg.apis||[]).map(a => {
+      const r = fr.apis[a.id] || {};
+      const used = fr.systems.filter(s => s.rule && s.rule.api === a.id)
+                             .map(s => s.label);
+      return li(`<b>${a.label}</b> &mdash; ${r.value===null||r.value===undefined
+        ? `<span class="muted">${r.status||"waiting"}</span>`
+        : `<span class="mono">${fmt(r.value,2)} ${a.units}</span>`}
+        ${used.length ? `&rarr; ${used.join(", ")}` : `<span class="muted">&rarr; not linked</span>`}`);
+    });
+    html = `<b>${rows.length} sources registered.</b><ul>${rows.join("")}</ul>`;
+  } else if(k === "py"){
+    html = `<b>The brain.</b> Navier-Stokes on a ${fr.nx}×${fr.ny} staggered grid,
+      ${S.cfg.sim.room_s_per_real_s}s of room time per real second.
+      <ul>${[
+        li(`solver step <span class="mono">${fmt(fr.step_ms,1)} ms</span>`),
+        li(`peak |div u| <span class="mono">${fr.max_div} s⁻¹</span> (0 = incompressible)`),
+        li(`room clock <span class="mono">${fmt(fr.sim_time_s,0)} s</span>, frame ${fr.frame}`),
+        li(`${fr.systems.filter(s=>s.rule).length} of ${fr.systems.length} systems rule-driven`)
+      ].join("")}</ul>`;
+  } else if(k === "json"){
+    html = `<b>One file per system, into exports/.</b>
+      <ul>${fr.systems.map(s => li(
+        `<span class="mono">${s.id}.json</span> &mdash; ${s.label},
+         out ${fmt(s.output,3)}`)).join("")}</ul>`;
+  } else if(k === "site"){
+    html = `<b>This page.</b>
+      <ul>${[
+        li(`showing <b>${FIELD_LABEL[fr.field]}</b>,
+            ${fmt(fr.min,1)} to ${fmt(fr.max,1)} ${FIELD_UNIT[fr.field]}`),
+        li(`mode <b>${fr.mode}</b> at ${fr.speed}×`),
+        li(`${fr.systems.length} systems drawn, 6 zones`)
+      ].join("")}</ul>`;
+  } else if(k === "gh"){
+    html = `<b>Grasshopper.</b> File Read component on a timer, pointed at
+      exports/. Not running from this page &mdash; press
+      <i>Write JSON to exports/</i> and Grasshopper picks it up on its next tick.
+      <ul>${[li(`<span class="mono">_room.json</span> carries the 6 zone values`),
+              li(`<span class="mono">_all_systems.json</span> carries everything at once`)].join("")}</ul>`;
+  } else {
+    html = `<b>Rhino.</b> The digital twin. Geometry driven by the same numbers
+      this page is drawing, so the model and the website never disagree.`;
+  }
+  box.innerHTML = html;
+}
+
+/* ---------- tables ---------- */
+function renderApiTable(){
+  const fr = S.frame; if(!fr) return;
+  const body = $("#apiBody");
+  const rows = (S.cfg.apis||[]).map(a => {
+    const r = fr.apis[a.id] || {};
+    const val = (r.value === null || r.value === undefined)
+      ? `<span class="muted">${r.status || "waiting"}</span>`
+      : `<span class="mono">${fmt(r.value,2)}</span> <span class="muted">${a.units}</span>`;
+    return `<tr class="apiRow"><td>${a.label}</td><td>${val}</td>
+      <td class="num"><canvas class="apiSpark" data-api="${a.id}"
+        style="width:84px;height:22px"></canvas></td></tr>`;
+  });
+  if(body.dataset.n !== String(rows.length) || body.dataset.sig !== apiSig()){
+    body.innerHTML = rows.join("");
+    body.dataset.n = String(rows.length);
+    body.dataset.sig = apiSig();
+  } else {
+    Array.from(body.querySelectorAll("tr")).forEach((tr,i) => {
+      const a = S.cfg.apis[i], r = fr.apis[a.id] || {};
+      tr.children[1].innerHTML = (r.value === null || r.value === undefined)
+        ? `<span class="muted">${r.status || "waiting"}</span>`
+        : `<span class="mono">${fmt(r.value,2)}</span> <span class="muted">${a.units}</span>`;
+    });
+  }
+  body.querySelectorAll(".apiSpark").forEach(cv => {
+    const a = S.cfg.apis.find(x => x.id === cv.dataset.api);
+    const r = fr.apis[a.id] || {};
+    drawSpark(cv, (r.history||[]).slice(-90), a.range[0], a.range[1], a.units);
+  });
+}
+const apiSig = () => (S.cfg.apis||[]).map(a=>a.id).join("|");
+
+/* The rules table is READ-ONLY on purpose. Rules live in app.py -> RULES and
+   nowhere else, so a student has to go and write one; the page only reports
+   what is there and which branch is firing right now. Do not turn this back
+   into a form - the point of the assignment is that Python is the brain. */
+function renderRuleTable(){
+  const fr = S.frame; if(!fr) return;
+  const body = $("#ruleBody");
+  const sig = fr.systems.map(s =>
+    s.id + "|" + (s.rule ? JSON.stringify(s.rule) : "-")).join(" ");
+
+  if(body.dataset.sig !== sig){
+    body.dataset.sig = sig;
+    body.innerHTML = fr.systems.map(s => {
+      const unit = SETPOINT_SUFFIX[s.type];
+      const head = `<td><b>${s.label}</b><br>
+        <span class="muted" style="font-size:10px">${SETPOINT_UNIT[s.type]}</span></td>`;
+      if(!s.rule){
+        return `<tr data-sys="${s.id}">${head}
+          <td class="needsRule">No rule &mdash; holding <b>${fmt(s.setpoint,2)}</b> ${unit}.<br>
+            Add one in <code>app.py &rarr; RULES</code>.</td>
+          <td class="num"><span class="dot"></span></td></tr>`;
+      }
+      const r = s.rule;
+      /* continuous ops (map / rank / share_of_max): the API scales the
+         setpoint instead of picking between two branches */
+      if(r.op === "map" || r.op === "rank" || r.op === "share_of_max"){
+        const how = r.op === "map"
+          ? `${r.value}&ndash;${r.value2} &rarr; ${r.otherwise}&ndash;${r.then} ${unit}`
+          : r.op === "rank"
+          ? `rank among ${r.among.length} &rarr; ${r.by_rank.join(" / ")} ${unit}`
+          : `&divide; max of ${r.among.length} &times; ${r.then}, min ${r.otherwise}`;
+        return `<tr data-sys="${s.id}">${head}
+          <td>
+            <div class="ruleline on" data-br="if"><span class="kw">${({map:"MAP",rank:"RANK",share_of_max:"SHARE"})[r.op]}</span>${r.api}</div>
+            <div class="ruleline" data-br="how"><span class="kw">&rarr;</span>${how}</div>
+            <div class="ruleline on" data-br="set"><span class="kw">SET</span><span class="setnow"></span></div>
+          </td>
+          <td class="num"><span class="dot"></span></td></tr>`;
+      }
+      const cmp = (r.op === "between" || r.op === "outside")
+        ? `${r.op} ${r.value} and ${r.value2}`
+        : `${r.op} ${r.value}`;
+      return `<tr data-sys="${s.id}">${head}
+        <td>
+          <div class="ruleline" data-br="if"><span class="kw">IF</span>${r.api} ${cmp}</div>
+          <div class="ruleline" data-br="then"><span class="kw">THEN</span>${r.then} ${unit}</div>
+          <div class="ruleline" data-br="else"><span class="kw">ELSE</span>${r.otherwise} ${unit}</div>
+        </td>
+        <td class="num"><span class="dot"></span></td></tr>`;
+    }).join("");
+  }
+
+  /* live layer: which branch is firing, and the reading that decides it */
+  fr.systems.forEach(s => {
+    const tr = body.querySelector(`tr[data-sys="${s.id}"]`);
+    if(!tr) return;
+    tr.querySelector(".dot").classList.toggle("on", !!s.rule_true);
+    if(!s.rule) return;
+    const v = (fr.apis[s.rule.api] || {}).value;
+    tr.querySelector('[data-br="if"]').dataset.now =
+      (v === null || v === undefined) ? "  (waiting)" : `  (now ${fmt(v,2)})`;
+    const setnow = tr.querySelector(".setnow");
+    if(setnow){
+      setnow.textContent = `${fmt(s.setpoint,2)} ${SETPOINT_SUFFIX[s.type]}` +
+        (s.type === "heat_pump" ? `  (${fmt(s.setpoint*9/5+32,0)} °F)` : "");
+      return;
+    }
+    tr.querySelector('[data-br="then"]').classList.toggle("on", s.rule_true === true);
+    tr.querySelector('[data-br="else"]').classList.toggle("on", s.rule_true === false);
+  });
+}
+
+/* ---------- zone + legend ---------- */
+function renderSideRail(){
+  const fr = S.frame; if(!fr) return;
+  const f = fr.field, u = FIELD_UNIT[f];
+  $("#legendTitle").textContent = FIELD_LABEL[f] + " (" + u + ")";
+  $("#legendBar").style.background = rampCss(f);
+  $("#tickLo").textContent = fmt(fr.range[0], f==="wind"?1:0) + " " + u;
+  $("#tickHi").textContent = fmt(fr.range[1], f==="wind"?1:0) + " " + u;
+  const d = f === "wind" ? 2 : 1;
+  $("#sMin").textContent  = fmt(fr.min, d) + " " + u;
+  $("#sMean").textContent = fmt(fr.mean, d) + " " + u;
+  $("#sMax").textContent  = fmt(fr.max, d) + " " + u;
+
+  const zg = $("#zoneGrid");
+  const vals = fr.zones[f] || [];
+  const ZONE_NAMES = ["SW · Pacific", "S-Central", "Southeast", "Northwest", "Midwest", "Northeast"];
+  if(zg.childElementCount !== 6){
+    zg.innerHTML = [1,2,3,4,5,6].map(z =>
+      `<div class="zonecell"><div class="z">Z${z} · ${ZONE_NAMES[z-1]}</div>
+       <div class="v" data-z="${z}">-</div></div>`).join("");
+  }
+  vals.forEach((v,i) => {
+    const el = zg.querySelector(`[data-z="${i+1}"]`);
+    if(el) el.textContent = fmt(v, d);
+  });
+  $("#solverNote").textContent =
+    `solver ${fmt(fr.step_ms,1)} ms/frame · peak |div u| ${fr.max_div} s⁻¹ · room clock ${fmt(fr.sim_time_s,0)} s`;
+}
+
+/* Place-mode edits are OPTIMISTIC. The poll loop replaces S.frame every 80 ms,
+   so a position the student just dragged would be reverted between frames -
+   and worse, the queued POST would then push that stale value back to the
+   server, undoing the drag. Local edits are recorded here and re-applied to
+   every incoming frame until the server reports the same value back. */
+function localEdit(sys, patch){
+  Object.assign(sys, patch);
+  S.pending[sys.id] = Object.assign(S.pending[sys.id] || {}, patch);
+}
+function applyPending(frame){
+  for(const sys of frame.systems){
+    const pend = S.pending[sys.id];
+    if(!pend) continue;
+    const settled = Object.keys(pend)
+      .every(k => Math.abs(sys[k] - pend[k]) < 5e-3);
+    if(settled && S.dragging !== sys.id){ delete S.pending[sys.id]; continue; }
+    Object.assign(sys, pend);
+  }
+}
+
+let pushTimer = null;
+function queueSystems(){
+  clearTimeout(pushTimer);
+  pushTimer = setTimeout(pushSystems, 120);
+}
+async function pushSystems(){
+  if(!S.frame) return;
+  await jpost("/api/systems", {systems: S.frame.systems.map(s => ({
+    id:s.id, x:s.x, y:s.y, rot:s.rot, power:s.power
+  }))});
+}
+
+/* ---------- polling ---------- */
+async function poll(){
+  try{
+    S.frame = await jget("/api/frame?field=" + S.field);
+    applyPending(S.frame);
+    S.pollFails = 0;
+    drawRoom(); renderSideRail(); updateSystemsRow();
+    renderApiTable(); renderRuleTable(); renderFlowInfo();
+    $("#footNote").textContent =
+      `${S.frame.nx}×${S.frame.ny} cells · ${fmt(S.frame.step_ms,1)} ms/frame · ` +
+      `room clock ${fmt(S.frame.sim_time_s,0)} s · frame ${S.frame.frame}`;
+  }catch(err){
+    S.pollFails++;
+    if(S.pollFails === 3){
+      $("#footNote").textContent = "Lost the backend. Is app.py still running?";
+    }
+  }
+  setTimeout(poll, S.pollFails ? 1500 : 80);
+}
+
+/* -- 6 ---------------------------------------------------------------- */
+function seg(sel, fn){
+  $$(sel + " button").forEach(b => b.addEventListener("click", () => {
+    $$(sel + " button").forEach(x => x.setAttribute("aria-pressed","false"));
+    b.setAttribute("aria-pressed","true");
+    fn(b.dataset);
+  }));
+}
+async function boot(){
+  S.cfg = await jget("/api/config");
+  buildSystemsRow();
+  buildFlow();
+  initInteraction();
+  requestAnimationFrame(animateFlow);
+
+  seg("#fieldSeg", d => { S.field = d.field; });
+  seg("#speedSeg", d => jpost("/api/speed", {speed: parseFloat(d.speed)}));
+  seg("#modeSeg",  d => {
+    S.mode = d.mode;
+    jpost("/api/mode", {mode: S.mode});
+    $("#placeHint").classList.toggle("hide", S.mode !== "place");
+    $("#copyPlaceBtn").disabled = S.mode !== "place";
+    $("#exportBtn").disabled    = S.mode !== "simulate";
+    drawRoom();
+  });
+  $("#copyPlaceBtn").disabled = true;
+
+  $("#resetBtn").addEventListener("click", () => jpost("/api/reset"));
+  $$(".viewBar [data-view]").forEach(b => b.addEventListener("click", () => {
+    const [az, el] = b.dataset.view.split(",").map(Number);
+    setView(az, el);
+  }));
+  updateViewNote();
+
+  $("#copyPlaceBtn").addEventListener("click", async () => {
+    const txt = await (await fetch("/api/placement")).text();
+    try{ await navigator.clipboard.writeText(txt);
+         msg("Copied. Paste it at Claude and ask for it hard-coded into app.py.");
+    }catch(_){ msg("Clipboard blocked — copy it from below."); }
+    $("#exportOut").textContent = txt;
+  });
+  $("#exportBtn").addEventListener("click", async () => {
+    const r = await jpost("/api/export");
+    S.lastExportAt = performance.now();
+    msg(`Wrote ${r.files.length} files.`);
+    $("#exportOut").textContent = r.dir + "\n\n" + r.files.join("\n");
+  });
+  $("#previewBtn").addEventListener("click", async () => {
+    const r = await jget("/api/export");
+    $("#exportOut").textContent = JSON.stringify(r, null, 2);
+    msg("Preview only — nothing written.");
+  });
+
+  $("#ruleUnits").innerHTML =
+    'Read-only. Rules live in <code>app.py</code> &rarr; <code>RULES</code> &mdash; ' +
+    'add one there and restart <code>python app.py</code>:' +
+    '<pre class="out" style="margin-top:6px">' +
+    '{"system": "fan_1", "api": "synthetic_spike", "op": "&gt;", "value": 70,\n' +
+    ' "value2": None, "then": 4.5, "otherwise": 0.4},</pre>' +
+    '<b>then</b> / <b>otherwise</b> are setpoints, in the unit shown under each ' +
+    'system name. Ops: <code>&gt;</code> <code>&lt;</code> <code>&gt;=</code> ' +
+    '<code>&lt;=</code> <code>between</code> <code>outside</code>, plus the ' +
+    'continuous <code>map</code> <code>rank</code> <code>share_of_max</code> ' +
+    '(explained in the RULES zone of app.py).';
+
+  window.addEventListener("resize", () => { drawRoom(); updateSystemsRow(); });
+  poll();
+}
+function msg(t){
+  $("#exportMsg").textContent = t;
+  setTimeout(() => { if($("#exportMsg").textContent === t) $("#exportMsg").textContent = ""; }, 6000);
+}
+boot();
+</script>
+</body>
+</html>
